@@ -348,8 +348,8 @@ class WebpagePDFDownloader:
                 self.root.after(0, lambda: self.update_status("Attempting login..."))
                 self._handle_selenium_auth(username, password)
             
-            # Wait for initial page load
-            time.sleep(3)
+            # Wait for initial page load and any authentication
+            time.sleep(5)
             
             # Find all clickable links and navigation elements
             self.root.after(0, lambda: self.update_status("Discovering pages..."))
@@ -388,7 +388,17 @@ class WebpagePDFDownloader:
                                   self.update_status(f"Getting page info {i+1}/{total}..."))
                     
                     self.driver.get(link_url)
-                    time.sleep(2)  # Wait for page to load
+                    time.sleep(4)  # Wait longer for complex pages to load
+                    
+                    # Wait for body content to be present
+                    try:
+                        WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.TAG_NAME, "body"))
+                        )
+                        # Additional wait for dynamic content
+                        time.sleep(2)
+                    except:
+                        pass
                     
                     title = self.driver.title or "No Title"
                     pages_data.append({
@@ -450,19 +460,32 @@ class WebpagePDFDownloader:
                 # Try to find and click login button
                 login_selectors = [
                     "input[type='submit']", "button[type='submit']",
-                    "input[value*='login']", "input[value*='Login']",
-                    "button:contains('Login')", "button:contains('Sign')",
-                    ".login-button", "#login", "#signin"
+                    "input[value*='login']", "input[value*='Login']", "input[value*='Sign']",
+                    "button[type='button']", ".login-button", ".signin-button", 
+                    "#login", "#signin", "#submit"
                 ]
                 
+                login_clicked = False
                 for selector in login_selectors:
                     try:
-                        login_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        login_button = WebDriverWait(self.driver, 2).until(
+                            EC.element_to_be_clickable((By.CSS_SELECTOR, selector))
+                        )
                         login_button.click()
-                        time.sleep(3)  # Wait for login to process
+                        login_clicked = True
                         break
                     except:
                         continue
+                
+                if login_clicked:
+                    time.sleep(8)  # Wait longer for login to process and redirects
+                    print("Login attempted successfully")
+                else:
+                    # Try pressing Enter on password field as fallback
+                    from selenium.webdriver.common.keys import Keys
+                    password_field.send_keys(Keys.RETURN)
+                    time.sleep(8)
+                    print("Login attempted via Enter key")
                         
         except Exception as e:
             print(f"Auth handling failed: {e}")
@@ -664,12 +687,22 @@ class WebpagePDFDownloader:
     def _get_page_content_selenium(self, url):
         """Get page content using Selenium - for JavaScript sites."""
         self.driver.get(url)
-        time.sleep(3)  # Wait for page to fully load
+        time.sleep(5)  # Wait longer for page to fully load
         
         # Wait for body to be present
         try:
-            WebDriverWait(self.driver, 10).until(
+            WebDriverWait(self.driver, 15).until(
                 EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            # Wait for any dynamic content to load
+            time.sleep(3)
+        except:
+            pass
+        
+        # Try to wait for content to be visible (not just present)
+        try:
+            WebDriverWait(self.driver, 10).until(
+                lambda driver: len(driver.find_elements(By.CSS_SELECTOR, "div, p, span, article, section")) > 0
             )
         except:
             pass
