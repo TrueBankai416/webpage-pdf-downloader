@@ -8,6 +8,20 @@ from urllib.parse import urljoin, urlparse
 import threading
 from typing import List, Dict, Optional
 import base64
+import time
+
+# Selenium imports
+try:
+    from selenium import webdriver
+    from selenium.webdriver.chrome.service import Service
+    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.common.by import By
+    from selenium.webdriver.support.ui import WebDriverWait
+    from selenium.webdriver.support import expected_conditions as EC
+    from webdriver_manager.chrome import ChromeDriverManager
+    SELENIUM_AVAILABLE = True
+except ImportError:
+    SELENIUM_AVAILABLE = False
 
 
 class WebpagePDFDownloader:
@@ -20,6 +34,7 @@ class WebpagePDFDownloader:
         self.pages_data = []
         self.selected_pages = {}
         self.session = requests.Session()
+        self.driver = None
         
         self.setup_gui()
     
@@ -50,6 +65,17 @@ class WebpagePDFDownloader:
         ttk.Label(cred_frame, text="Password:").grid(row=1, column=0, sticky=tk.W, pady=2)
         self.password_entry = ttk.Entry(cred_frame, show="*", width=30)
         self.password_entry.grid(row=1, column=1, sticky=(tk.W, tk.E), pady=2, padx=(5, 0))
+        
+        # JavaScript rendering option
+        self.js_enabled = tk.BooleanVar()
+        if SELENIUM_AVAILABLE:
+            self.js_checkbox = ttk.Checkbutton(cred_frame, text="Enable JavaScript rendering (for modern websites)", 
+                                             variable=self.js_enabled)
+            self.js_checkbox.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
+        else:
+            self.js_label = ttk.Label(cred_frame, text="Install selenium for JavaScript support", 
+                                    foreground="gray")
+            self.js_label.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
         
         # Buttons
         button_frame = ttk.Frame(main_frame)
@@ -107,76 +133,54 @@ class WebpagePDFDownloader:
         self.status_label.config(text=message)
         self.root.update_idletasks()
     
+    def setup_browser(self):
+        """Setup and return a headless Chrome browser instance."""
+        try:
+            chrome_options = Options()
+            chrome_options.add_argument("--headless")
+            chrome_options.add_argument("--no-sandbox")
+            chrome_options.add_argument("--disable-dev-shm-usage")
+            chrome_options.add_argument("--disable-gpu")
+            chrome_options.add_argument("--window-size=1920,1080")
+            chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
+            
+            service = Service(ChromeDriverManager().install())
+            driver = webdriver.Chrome(service=service, options=chrome_options)
+            driver.set_page_load_timeout(30)
+            return driver
+        except Exception as e:
+            raise Exception(f"Failed to setup browser: {str(e)}")
+    
+    def cleanup_browser(self):
+        """Clean up browser resources."""
+        if self.driver:
+            try:
+                self.driver.quit()
+            except:
+                pass
+            self.driver = None
+    
     def scan_website(self):
         url = self.url_entry.get().strip()
         if not url:
             messagebox.showerror("Error", "Please enter a URL")
             return
         
+        use_js = self.js_enabled.get() if SELENIUM_AVAILABLE else False
+        
         # Start scanning in a separate thread
-        threading.Thread(target=self._scan_website_thread, args=(url,), daemon=True).start()
+        threading.Thread(target=self._scan_website_thread, args=(url, use_js), daemon=True).start()
     
-    def _scan_website_thread(self, url):
+    def _scan_website_thread(self, url, use_js=False):
         try:
             self.root.after(0, lambda: self.progress.start())
             self.root.after(0, lambda: self.update_status("Scanning website..."))
             self.root.after(0, lambda: self.scan_button.config(state=tk.DISABLED))
             
-            # Setup authentication if provided
-            username = self.username_entry.get().strip()
-            password = self.password_entry.get().strip()
-            
-            if username and password:
-                # Try basic auth first
-                self.session.auth = (username, password)
-            
-            # Get the main page
-            response = self.session.get(url)
-            response.raise_for_status()
-            
-            # Parse the page
-            soup = BeautifulSoup(response.text, 'html.parser')
-            
-            # Find all links
-            links = set()
-            base_domain = urlparse(url).netloc
-            
-            # Add the current page
-            links.add(url)
-            
-            # Find all internal links
-            for link in soup.find_all('a', href=True):
-                href = link['href']
-                full_url = urljoin(url, href)
-                parsed_url = urlparse(full_url)
-                
-                # Only include links from the same domain
-                if parsed_url.netloc == base_domain:
-                    # Remove fragments and query parameters for cleaner URLs
-                    clean_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
-                    if clean_url not in links and clean_url != url:
-                        links.add(clean_url)
-            
-            # Get page titles
-            pages_data = []
-            for link_url in links:
-                try:
-                    page_response = self.session.get(link_url, timeout=10)
-                    page_soup = BeautifulSoup(page_response.text, 'html.parser')
-                    title_tag = page_soup.find('title')
-                    title = title_tag.text.strip() if title_tag else "No Title"
-                    pages_data.append({
-                        'url': link_url,
-                        'title': title,
-                        'selected': False
-                    })
-                except Exception as e:
-                    # If we can't fetch a page, still add it but note the error
-                    pages_data.append({
-                        'url': link_url,
-                        'title': f"Error loading: {str(e)[:50]}",
-                        'selected': False
-                    })
+            if use_js and SELENIUM_AVAILABLE:
+                pages_data = self._scan_with_javascript(url)
+            else:
+                pages_data = self._scan_static_html(url)
             
             # Update GUI in main thread
             self.pages_data = pages_data
@@ -190,7 +194,257 @@ class WebpagePDFDownloader:
             self.root.after(0, lambda: self.progress.stop())
             self.root.after(0, lambda: self.update_status("Error scanning website"))
             self.root.after(0, lambda: self.scan_button.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.cleanup_browser())
             self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to scan website: {str(e)}"))
+    
+    def _scan_static_html(self, url):
+        """Scan website using traditional HTTP requests - works for static sites."""
+        # Setup authentication if provided
+        username = self.username_entry.get().strip()
+        password = self.password_entry.get().strip()
+        
+        if username and password:
+            self.session.auth = (username, password)
+        
+        # Get the main page
+        response = self.session.get(url)
+        response.raise_for_status()
+        
+        # Parse the page
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Find all links
+        links = set()
+        base_domain = urlparse(url).netloc
+        
+        # Add the current page
+        links.add(url)
+        
+        # Find all internal links
+        for link in soup.find_all('a', href=True):
+            href = link['href']
+            full_url = urljoin(url, href)
+            parsed_url = urlparse(full_url)
+            
+            # Only include links from the same domain
+            if parsed_url.netloc == base_domain:
+                # Remove fragments and query parameters for cleaner URLs
+                clean_url = f"{parsed_url.scheme}://{parsed_url.netloc}{parsed_url.path}"
+                if clean_url not in links and clean_url != url:
+                    links.add(clean_url)
+        
+        # Get page titles
+        pages_data = []
+        for link_url in links:
+            try:
+                page_response = self.session.get(link_url, timeout=10)
+                page_soup = BeautifulSoup(page_response.text, 'html.parser')
+                title_tag = page_soup.find('title')
+                title = title_tag.text.strip() if title_tag else "No Title"
+                pages_data.append({
+                    'url': link_url,
+                    'title': title,
+                    'selected': False
+                })
+            except Exception as e:
+                pages_data.append({
+                    'url': link_url,
+                    'title': f"Error loading: {str(e)[:50]}",
+                    'selected': False
+                })
+        
+        return pages_data
+    
+    def _scan_with_javascript(self, url):
+        """Scan website using Selenium - works for JavaScript-heavy sites."""
+        self.root.after(0, lambda: self.update_status("Setting up browser..."))
+        
+        try:
+            self.driver = self.setup_browser()
+            
+            # Navigate to the main page
+            self.root.after(0, lambda: self.update_status("Loading main page..."))
+            self.driver.get(url)
+            
+            # Handle authentication if provided
+            username = self.username_entry.get().strip()
+            password = self.password_entry.get().strip()
+            
+            if username and password:
+                self.root.after(0, lambda: self.update_status("Attempting login..."))
+                self._handle_selenium_auth(username, password)
+            
+            # Wait for initial page load
+            time.sleep(3)
+            
+            # Find all clickable links and navigation elements
+            self.root.after(0, lambda: self.update_status("Discovering pages..."))
+            links = self._discover_javascript_links()
+            
+            base_domain = urlparse(url).netloc
+            valid_links = set()
+            
+            # Add the current page
+            valid_links.add(self.driver.current_url)
+            
+            # Filter links to same domain
+            for link in links:
+                try:
+                    parsed_url = urlparse(link)
+                    if parsed_url.netloc == base_domain or not parsed_url.netloc:
+                        # Handle relative URLs
+                        if not parsed_url.netloc:
+                            link = urljoin(url, link)
+                        
+                        # Clean up the URL
+                        parsed_clean = urlparse(link)
+                        clean_url = f"{parsed_clean.scheme}://{parsed_clean.netloc}{parsed_clean.path}"
+                        if clean_url not in valid_links:
+                            valid_links.add(clean_url)
+                except:
+                    continue
+            
+            # Get page titles by visiting each link
+            pages_data = []
+            total_links = len(valid_links)
+            
+            for i, link_url in enumerate(valid_links):
+                try:
+                    self.root.after(0, lambda i=i, total=total_links: 
+                                  self.update_status(f"Getting page info {i+1}/{total}..."))
+                    
+                    self.driver.get(link_url)
+                    time.sleep(2)  # Wait for page to load
+                    
+                    title = self.driver.title or "No Title"
+                    pages_data.append({
+                        'url': link_url,
+                        'title': title,
+                        'selected': False
+                    })
+                except Exception as e:
+                    pages_data.append({
+                        'url': link_url,
+                        'title': f"Error loading: {str(e)[:50]}",
+                        'selected': False
+                    })
+            
+            return pages_data
+            
+        finally:
+            self.cleanup_browser()
+    
+    def _handle_selenium_auth(self, username, password):
+        """Handle authentication in Selenium browser."""
+        try:
+            # Look for common login form elements
+            username_selectors = [
+                "input[name='username']", "input[name='user']", "input[name='email']",
+                "input[id='username']", "input[id='user']", "input[id='email']",
+                "input[type='email']", "#username", "#user", "#email"
+            ]
+            
+            password_selectors = [
+                "input[name='password']", "input[name='pass']",
+                "input[id='password']", "input[id='pass']",
+                "input[type='password']", "#password", "#pass"
+            ]
+            
+            username_field = None
+            password_field = None
+            
+            # Try to find username field
+            for selector in username_selectors:
+                try:
+                    username_field = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    break
+                except:
+                    continue
+            
+            # Try to find password field
+            for selector in password_selectors:
+                try:
+                    password_field = self.driver.find_element(By.CSS_SELECTOR, selector)
+                    break
+                except:
+                    continue
+            
+            if username_field and password_field:
+                username_field.send_keys(username)
+                password_field.send_keys(password)
+                
+                # Try to find and click login button
+                login_selectors = [
+                    "input[type='submit']", "button[type='submit']",
+                    "input[value*='login']", "input[value*='Login']",
+                    "button:contains('Login')", "button:contains('Sign')",
+                    ".login-button", "#login", "#signin"
+                ]
+                
+                for selector in login_selectors:
+                    try:
+                        login_button = self.driver.find_element(By.CSS_SELECTOR, selector)
+                        login_button.click()
+                        time.sleep(3)  # Wait for login to process
+                        break
+                    except:
+                        continue
+                        
+        except Exception as e:
+            print(f"Auth handling failed: {e}")
+    
+    def _discover_javascript_links(self):
+        """Discover links in JavaScript-heavy sites."""
+        links = set()
+        
+        try:
+            # Get all anchor tags
+            anchor_elements = self.driver.find_elements(By.TAG_NAME, "a")
+            for element in anchor_elements:
+                href = element.get_attribute("href")
+                if href:
+                    links.add(href)
+            
+            # Get elements with click handlers that might be navigation
+            clickable_selectors = [
+                "[onclick]", "[data-href]", "[data-url]", 
+                ".nav-link", ".menu-item", ".link",
+                "[role='button']", ".button"
+            ]
+            
+            for selector in clickable_selectors:
+                elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
+                for element in elements:
+                    # Try various attributes that might contain URLs
+                    for attr in ['data-href', 'data-url', 'onclick']:
+                        value = element.get_attribute(attr)
+                        if value and ('http' in value or '/' in value):
+                            # Extract URL from onclick or data attributes
+                            if 'http' in value:
+                                import re
+                                urls = re.findall(r'https?://[^\s\'\"]+', value)
+                                links.update(urls)
+                            elif value.startswith('/'):
+                                links.add(value)
+            
+            # Try to execute JavaScript to get more dynamic links
+            try:
+                js_links = self.driver.execute_script("""
+                    var links = [];
+                    var anchors = document.querySelectorAll('a[href]');
+                    for (var i = 0; i < anchors.length; i++) {
+                        links.push(anchors[i].href);
+                    }
+                    return links;
+                """)
+                links.update(js_links)
+            except:
+                pass
+                
+        except Exception as e:
+            print(f"Link discovery error: {e}")
+        
+        return list(links)
     
     def _update_pages_list(self):
         # Clear existing items
@@ -259,15 +513,31 @@ class WebpagePDFDownloader:
             self.root.after(0, lambda: self.download_button.config(state=tk.DISABLED))
             
             total_pages = len(selected_indices)
+            use_js = self.js_enabled.get() if SELENIUM_AVAILABLE else False
+            
+            # Setup browser if using JavaScript
+            if use_js:
+                self.root.after(0, lambda: self.update_status("Setting up browser for downloads..."))
+                self.driver = self.setup_browser()
+                
+                # Handle authentication if provided
+                username = self.username_entry.get().strip()
+                password = self.password_entry.get().strip()
+                if username and password:
+                    # Navigate to first page to set up authentication
+                    first_page = self.pages_data[selected_indices[0]]
+                    self.driver.get(first_page['url'])
+                    self._handle_selenium_auth(username, password)
             
             for i, page_index in enumerate(selected_indices):
                 page = self.pages_data[page_index]
                 self.root.after(0, lambda p=page: self.update_status(f"Downloading: {p['title']}"))
                 
                 try:
-                    # Get page content
-                    response = self.session.get(page['url'])
-                    response.raise_for_status()
+                    if use_js and SELENIUM_AVAILABLE:
+                        html_content = self._get_page_content_selenium(page['url'])
+                    else:
+                        html_content = self._get_page_content_requests(page['url'])
                     
                     # Create PDF filename
                     safe_title = "".join(c for c in page['title'] if c.isalnum() or c in (' ', '-', '_')).rstrip()
@@ -286,7 +556,7 @@ class WebpagePDFDownloader:
                         counter += 1
                     
                     # Convert to PDF
-                    html_doc = weasyprint.HTML(string=response.text, base_url=page['url'])
+                    html_doc = weasyprint.HTML(string=html_content, base_url=page['url'])
                     html_doc.write_pdf(pdf_path)
                     
                     progress_msg = f"Downloaded {i+1}/{total_pages}: {page['title']}"
@@ -299,14 +569,38 @@ class WebpagePDFDownloader:
             
             self.root.after(0, lambda: self.progress.stop())
             self.root.after(0, lambda: self.download_button.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.cleanup_browser())
             self.root.after(0, lambda: self.update_status(f"Downloaded {total_pages} pages to {output_dir}"))
             self.root.after(0, lambda: messagebox.showinfo("Success", f"Downloaded {total_pages} pages successfully!"))
             
         except Exception as e:
             self.root.after(0, lambda: self.progress.stop())
             self.root.after(0, lambda: self.download_button.config(state=tk.NORMAL))
+            self.root.after(0, lambda: self.cleanup_browser())
             self.root.after(0, lambda: self.update_status("Error during download"))
             self.root.after(0, lambda: messagebox.showerror("Error", f"Download failed: {str(e)}"))
+    
+    def _get_page_content_requests(self, url):
+        """Get page content using requests - for static sites."""
+        response = self.session.get(url)
+        response.raise_for_status()
+        return response.text
+    
+    def _get_page_content_selenium(self, url):
+        """Get page content using Selenium - for JavaScript sites."""
+        self.driver.get(url)
+        time.sleep(3)  # Wait for page to fully load
+        
+        # Wait for body to be present
+        try:
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+        except:
+            pass
+        
+        # Get the fully rendered HTML
+        return self.driver.page_source
 
 
 def main():
