@@ -19,14 +19,18 @@ A Python GUI application that allows you to download webpages as individual PDF 
 ## Installation
 
 1. Make sure you have Python 3.7+ installed
-2. Install Google Chrome (required for JavaScript rendering)
+2. Install at least one supported browser for JavaScript rendering:
+   - **Chrome** (recommended): https://www.google.com/chrome/
+   - **Firefox**: https://www.mozilla.org/firefox/
+   - **Edge**: Usually pre-installed on Windows
+   - **Safari**: Pre-installed on macOS
 3. Install the required dependencies:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-**Note**: The application will automatically download ChromeDriver when first using JavaScript rendering.
+**Note**: The application will automatically detect and use any available browser, downloading the appropriate driver when first used.
 
 ## Usage
 
@@ -75,7 +79,7 @@ python webpage_pdf_downloader.py
 ### JavaScript Support (Optional)
 - selenium
 - webdriver-manager
-- Google Chrome browser
+- At least one browser: Chrome, Firefox, Edge, or Safari
 
 ## Example Websites
 

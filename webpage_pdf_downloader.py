@@ -13,12 +13,19 @@ import time
 # Selenium imports
 try:
     from selenium import webdriver
-    from selenium.webdriver.chrome.service import Service
-    from selenium.webdriver.chrome.options import Options
+    from selenium.webdriver.chrome.service import Service as ChromeService
+    from selenium.webdriver.chrome.options import Options as ChromeOptions
+    from selenium.webdriver.firefox.service import Service as FirefoxService
+    from selenium.webdriver.firefox.options import Options as FirefoxOptions
+    from selenium.webdriver.edge.service import Service as EdgeService
+    from selenium.webdriver.edge.options import Options as EdgeOptions
+    from selenium.webdriver.safari.options import Options as SafariOptions
     from selenium.webdriver.common.by import By
     from selenium.webdriver.support.ui import WebDriverWait
     from selenium.webdriver.support import expected_conditions as EC
     from webdriver_manager.chrome import ChromeDriverManager
+    from webdriver_manager.firefox import GeckoDriverManager
+    from webdriver_manager.microsoft import EdgeChromiumDriverManager
     SELENIUM_AVAILABLE = True
 except ImportError:
     SELENIUM_AVAILABLE = False
@@ -69,7 +76,7 @@ class WebpagePDFDownloader:
         # JavaScript rendering option
         self.js_enabled = tk.BooleanVar()
         if SELENIUM_AVAILABLE:
-            self.js_checkbox = ttk.Checkbutton(cred_frame, text="Enable JavaScript rendering (for modern websites)", 
+            self.js_checkbox = ttk.Checkbutton(cred_frame, text="Enable JavaScript rendering (auto-detects browser)", 
                                              variable=self.js_enabled)
             self.js_checkbox.grid(row=2, column=0, columnspan=2, sticky=tk.W, pady=5)
         else:
@@ -134,9 +141,13 @@ class WebpagePDFDownloader:
         self.root.update_idletasks()
     
     def setup_browser(self):
-        """Setup and return a headless Chrome browser instance."""
+        """Setup and return a headless browser instance using any available browser."""
+        browser_attempts = []
+        
+        # Try Chrome first
         try:
-            chrome_options = Options()
+            self.root.after(0, lambda: self.update_status("Trying Chrome browser..."))
+            chrome_options = ChromeOptions()
             chrome_options.add_argument("--headless")
             chrome_options.add_argument("--no-sandbox")
             chrome_options.add_argument("--disable-dev-shm-usage")
@@ -144,23 +155,74 @@ class WebpagePDFDownloader:
             chrome_options.add_argument("--window-size=1920,1080")
             chrome_options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36")
             
-            service = Service(ChromeDriverManager().install())
+            service = ChromeService(ChromeDriverManager().install())
             driver = webdriver.Chrome(service=service, options=chrome_options)
             driver.set_page_load_timeout(30)
+            self.root.after(0, lambda: self.update_status("Using Chrome browser"))
             return driver
         except Exception as e:
-            error_str = str(e).lower()
-            if "chrome binary" in error_str or "chromedriver" in error_str:
-                raise Exception(
-                    "Google Chrome browser is not installed or not found.\n\n"
-                    "To fix this:\n"
-                    "• Windows/Mac: Download Chrome from https://www.google.com/chrome/\n"
-                    "• Ubuntu/Debian: sudo apt install google-chrome-stable\n"
-                    "• CentOS/Fedora: sudo dnf install google-chrome-stable\n\n"
-                    "Alternatively, uncheck 'JavaScript rendering' to use static mode."
-                )
+            browser_attempts.append(f"Chrome: {str(e)}")
+        
+        # Try Firefox
+        try:
+            self.root.after(0, lambda: self.update_status("Trying Firefox browser..."))
+            firefox_options = FirefoxOptions()
+            firefox_options.add_argument("--headless")
+            firefox_options.add_argument("--width=1920")
+            firefox_options.add_argument("--height=1080")
+            
+            service = FirefoxService(GeckoDriverManager().install())
+            driver = webdriver.Firefox(service=service, options=firefox_options)
+            driver.set_page_load_timeout(30)
+            self.root.after(0, lambda: self.update_status("Using Firefox browser"))
+            return driver
+        except Exception as e:
+            browser_attempts.append(f"Firefox: {str(e)}")
+        
+        # Try Edge (Windows)
+        try:
+            self.root.after(0, lambda: self.update_status("Trying Edge browser..."))
+            edge_options = EdgeOptions()
+            edge_options.add_argument("--headless")
+            edge_options.add_argument("--no-sandbox")
+            edge_options.add_argument("--disable-dev-shm-usage")
+            edge_options.add_argument("--disable-gpu")
+            edge_options.add_argument("--window-size=1920,1080")
+            
+            service = EdgeService(EdgeChromiumDriverManager().install())
+            driver = webdriver.Edge(service=service, options=edge_options)
+            driver.set_page_load_timeout(30)
+            self.root.after(0, lambda: self.update_status("Using Edge browser"))
+            return driver
+        except Exception as e:
+            browser_attempts.append(f"Edge: {str(e)}")
+        
+        # Try Safari (macOS only)
+        try:
+            self.root.after(0, lambda: self.update_status("Trying Safari browser..."))
+            import platform
+            if platform.system() == "Darwin":  # macOS
+                safari_options = SafariOptions()
+                driver = webdriver.Safari(options=safari_options)
+                driver.set_page_load_timeout(30)
+                self.root.after(0, lambda: self.update_status("Using Safari browser"))
+                return driver
             else:
-                raise Exception(f"Failed to setup browser: {str(e)}")
+                browser_attempts.append("Safari: Not available on this platform")
+        except Exception as e:
+            browser_attempts.append(f"Safari: {str(e)}")
+        
+        # If all browsers failed, provide helpful error message
+        error_message = (
+            "No supported browsers found. Tried:\n\n" + 
+            "\n".join(f"• {attempt}" for attempt in browser_attempts) +
+            "\n\nTo fix this, install one of these browsers:\n"
+            "• Chrome: https://www.google.com/chrome/\n"
+            "• Firefox: https://www.mozilla.org/firefox/\n"
+            "• Edge: Usually pre-installed on Windows\n\n"
+            "Alternatively, uncheck 'JavaScript rendering' to use static mode."
+        )
+        raise Exception(error_message)
     
     def cleanup_browser(self):
         """Clean up browser resources."""
