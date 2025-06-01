@@ -191,11 +191,12 @@ class WebpagePDFDownloader:
             self.root.after(0, lambda: self.select_all_button.config(state=tk.NORMAL))
             
         except Exception as e:
+            error_msg = f"Failed to scan website: {str(e)}"
             self.root.after(0, lambda: self.progress.stop())
             self.root.after(0, lambda: self.update_status("Error scanning website"))
             self.root.after(0, lambda: self.scan_button.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.cleanup_browser())
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Failed to scan website: {str(e)}"))
+            self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
     
     def _scan_static_html(self, url):
         """Scan website using traditional HTTP requests - works for static sites."""
@@ -574,11 +575,12 @@ class WebpagePDFDownloader:
             self.root.after(0, lambda: messagebox.showinfo("Success", f"Downloaded {total_pages} pages successfully!"))
             
         except Exception as e:
+            error_msg = f"Download failed: {str(e)}"
             self.root.after(0, lambda: self.progress.stop())
             self.root.after(0, lambda: self.download_button.config(state=tk.NORMAL))
             self.root.after(0, lambda: self.cleanup_browser())
             self.root.after(0, lambda: self.update_status("Error during download"))
-            self.root.after(0, lambda: messagebox.showerror("Error", f"Download failed: {str(e)}"))
+            self.root.after(0, lambda: messagebox.showerror("Error", error_msg))
     
     def _get_page_content_requests(self, url):
         """Get page content using requests - for static sites."""
