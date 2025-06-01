@@ -149,7 +149,18 @@ class WebpagePDFDownloader:
             driver.set_page_load_timeout(30)
             return driver
         except Exception as e:
-            raise Exception(f"Failed to setup browser: {str(e)}")
+            error_str = str(e).lower()
+            if "chrome binary" in error_str or "chromedriver" in error_str:
+                raise Exception(
+                    "Google Chrome browser is not installed or not found.\n\n"
+                    "To fix this:\n"
+                    "• Windows/Mac: Download Chrome from https://www.google.com/chrome/\n"
+                    "• Ubuntu/Debian: sudo apt install google-chrome-stable\n"
+                    "• CentOS/Fedora: sudo dnf install google-chrome-stable\n\n"
+                    "Alternatively, uncheck 'JavaScript rendering' to use static mode."
+                )
+            else:
+                raise Exception(f"Failed to setup browser: {str(e)}")
     
     def cleanup_browser(self):
         """Clean up browser resources."""
